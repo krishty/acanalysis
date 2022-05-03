@@ -107,6 +107,7 @@
     <Compile Include="map.Designer.cs">
       <DependentUpon>map.cs</DependentUpon>
     </Compile>
+    <Compile Include="Namco.ULZ.cs" />
     <Compile Include="Notes.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

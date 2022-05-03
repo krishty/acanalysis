@@ -13,6 +13,7 @@ namespace AC4Analysis
     {
         public uint add;
         public uint size;
+        public byte[] extractedData; // in case the node is compressed in the original file
     }
     public partial class AC4Analysis : Form
     {
@@ -92,8 +93,8 @@ namespace AC4Analysis
                     TreeNode tn = new TreeNode();
                     tn.Name = L1.add.ToString();
                     tn.Text = string.Format("{0:X8}", L1.add);
+                    uint subNum = CheckAddList(L1.add, L1.size, brc, tn, ref L1);
                     tn.Tag = L1;
-                    uint subNum = CheckAddList(L1.add, L1.size, brc, tn);
                     if (subNum > 0)
                         tn.Text = string.Format("{0:X8} {1} {2}", L1.add, subNum, Notes.Get(L1.add));
                     treeView1.Nodes.Add(tn);
@@ -163,27 +164,43 @@ namespace AC4Analysis
         {
             if (treeView1.SelectedNode == null)
                 return;
+            culdata = null;
             panel1.VerticalScroll.Value = 0;
             panel1.HorizontalScroll.Value = 0;
             _L1 tmp = (_L1)treeView1.SelectedNode.Tag;
             culsize = tmp.size;
             tb大小.Text = string.Format("{0:X8}",tmp.size);
             tb相对地址.Text = string.Format("{0:X8}", tmp.add);
-            TreeNode pnode = treeView1.SelectedNode.Parent;
-            uint totaladd = tmp.add;
+            TreeNode pnode = treeView1.SelectedNode;
+            uint totaladd = 0;
             while (pnode != null)
             {
                 _L1 tmpp = (_L1)pnode.Tag;
+                if (null != tmpp.extractedData)
+                {
+                    culdata = tmpp.extractedData;
+                    break;
+                }
                 totaladd += tmpp.add;
                 pnode = pnode.Parent;
             }
             culadd = totaladd;
             tb绝对地址.Text = string.Format("{0:X8}", totaladd);
-            FileStream fsc = new FileStream(cdpfilename, FileMode.Open);
-            culdata = new byte[culsize];
-            fsc.Seek((int)culadd, SeekOrigin.Begin);
-            fsc.Read(culdata, 0, (int)culsize);
-            fsc.Close();
+            if (null == culdata)
+            {
+                FileStream fsc = new FileStream(cdpfilename, FileMode.Open);
+                culdata = new byte[culsize];
+                fsc.Seek((int)culadd, SeekOrigin.Begin);
+                fsc.Read(culdata, 0, (int)culsize);
+                fsc.Close();
+            }
+            else
+            {
+                var isolatedData = new byte[(int)culsize];
+                for (int i = 0; i < (int)culsize; ++i)
+                    isolatedData[i] = culdata[culadd + i];
+                culdata = isolatedData;
+            }
 
             panel1.Controls.Clear();
             mapwin.CulData = culdata;
@@ -236,7 +253,7 @@ namespace AC4Analysis
                 return;
             }
         }
-        private uint CheckAddList(uint add, uint size, BinaryReader brc, TreeNode pnode)
+        private uint CheckAddList(uint add, uint size, BinaryReader brc, TreeNode pnode, ref _L1 itsTag)
         {
             brc.BaseStream.Seek(add, SeekOrigin.Begin);
             uint subNum = brc.ReadUInt32();
@@ -244,6 +261,23 @@ namespace AC4Analysis
                 return 0;
             if (subNum == 0)
                 return 0;
+            if (subNum == 0x1A7A6C55) // “Ulz\u001a” in Little-Endian
+            {
+                // Extract the ULZ-compressed directory and retry.
+
+                // ULZ is note streamable because it uses absolute parallel offsets into the data. Fetch to array.
+                var ulz = new byte[size];
+                ulz[0] = (byte)'U';
+                ulz[1] = (byte)'l';
+                ulz[2] = (byte)'z';
+                ulz[3] = 0x1A;
+                if (size - 4 != brc.BaseStream.Read(ulz, 4, (int)size - 4))
+                    throw new System.IO.EndOfStreamException();
+
+                var data = Namco.ULZ.decompress(ulz);
+                itsTag.extractedData = data;
+                return CheckAddList(0, (uint)data.Length, new BinaryReader(new MemoryStream(data)), pnode, ref itsTag);
+            }
             if (subNum * 4 > size)
                 return 0;
             uint lastAdd = 0;
@@ -286,7 +320,7 @@ namespace AC4Analysis
                     }
                     nodes[i - 1] = new TreeNode();
 
-                    uint subNum2 = CheckAddList(tmp.add + add, tmp.size, brc, nodes[i - 1]);
+                    uint subNum2 = CheckAddList(tmp.add + add, tmp.size, brc, nodes[i - 1], ref tmp);
                     nodes[i - 1].Name = tmp.add.ToString();
 
                     nodes[i - 1].Text = string.Format("{0:X8},{1} {2} {3}", tmp.add, subNum2, GetDataHead(add + tmp.add, (int)tmp.size, brc), Notes.Get(add + tmp.add));
@@ -301,7 +335,7 @@ namespace AC4Analysis
                 tmp2.add = lastAdd;
                 tmp2.size = size - lastAdd;
                 nodes[subNum - 1] = new TreeNode();
-                uint subNum3 = CheckAddList(tmp2.add + add, tmp2.size, brc, nodes[subNum - 1]);
+                uint subNum3 = CheckAddList(tmp2.add + add, tmp2.size, brc, nodes[subNum - 1], ref tmp2);
                 nodes[subNum - 1].Name = tmp2.add.ToString();
                 nodes[subNum - 1].Text = string.Format("{0:X8},{1} {2} {3}", tmp2.add, subNum3, GetDataHead(add + tmp2.add, (int)tmp2.size, brc), Notes.Get(add + tmp2.add));
                 nodes[subNum - 1].Tag = tmp2;
